@@ -1,1 +1,1 @@
-[{"name":"1-start.jpg","query":"?pose=start&seed=1"},{"name":"2-play.jpg","query":"?pose=combat&seed=1"},{"name":"3-plant.jpg","query":"?pose=plant&seed=1"},{"name":"4-end.jpg","query":"?pose=end&seed=1"}]
+[{"name":"1-firefight.png","query":"?pose=combat&seed=1"},{"name":"2-buymenu.png","query":"?seed=1"},{"name":"3-smoke-defuse.png","query":"?pose=plant&seed=1"},{"name":"4-scoreboard.png","query":"?pose=combat&hud=scoreboard&seed=1"}]
