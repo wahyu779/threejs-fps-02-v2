@@ -1,38 +1,19 @@
-// map.js — Pelabuhan Senja: a 40x40 harbour map, its collision, and A*.
+// map.js — a 40x40 harbour map, its collision, and A*.
 // One job: know where walls are, and find smooth paths through them.
-//
-// Layout (world metres, x east, z south, origin at map centre; cell = 2 m):
-//   * outer quay wall around the whole 80x80 apron
-//   * north-west warehouse (site A) and south-east dock office (site B)
-//   * two lanes: the west quay lane and the east container lane, joined by
-//     a mid cross-alley through the container yard
-//   * container stacks and crates as cover; nothing is a Counter-Strike map,
-//     the names and shapes are the harbour's own.
-//
-// LANE P (v2) — what changed vs the draft, and why:
-//   1. Heuristik Manhattan -> OCTILE. Manhattan overestimates pada gerakan
-//      8 arah (contoh: (0,0)->(1,1): Manhattan = 2, biaya sebenarnya
-//      sqrt(2) = 1.414). Heuristik yang overestimate membuat A* TIDAK
-//      lagi optimal. Octile tidak pernah overestimate (bukti di bawah),
-//      jadi path yang dikembalikan optimal — diverifikasi sama panjang
-//      dengan BFS pada semua rute sampel.
-//   2. Heap dengan decrease-key yang BENAR (position map heapPos).
-//      Draft menimpa fScore[i] saat push duplikat tanpa memperbaiki posisi
-//      heap -> invarian heap bisa rusak -> urutan pop tidak lagi urut-f
-//      -> optimalitas tidak terjamin. Di sini satu entri per node, update
-//      f berarti bubble-up lewat heapPos. Entri basi tidak ada.
-//   3. smoothPath diekspor terpisah + findPath dibangun di atas
-//      astarCells + smoothPath, supaya keduanya bisa dites terpisah.
-//   4. nearestWaypoint(x, z) ditambahkan (titik bebas terdekat).
-//   5. Biaya diagonal Math.SQRT2 eksak (draft memakai 1.4142).
+// Layout (metres, x east, z south, origin at map centre; cell = 2 m):
+// outer quay wall, NW warehouse (site A), SE dock office (site B), two
+// lanes joined by a mid cross-alley, container stacks and crates as cover.
+// A*: OCTILE heuristic (never overestimates — so returned paths are optimal,
+// verified equal-length vs BFS on all sample routes). Heap with a true
+// decrease-key (heapPos map; one entry per node, no stale entries).
+// Diagonal cost is exact Math.SQRT2.
 import { clamp } from './rng.js';
 
 export const CELL = 2;          // metres per grid cell
 export const GRID = 40;         // cells per side
 export const HALF = (GRID * CELL) / 2; // 40 m, world half-size
 
-// Wall rectangles: [x0, z0, x1, z1] in world metres. Built by hand so the
-// lanes read clearly: border, warehouse, dock office, container stacks.
+// Wall rectangles [x0, z0, x1, z1] in metres, laid out by hand so the lanes read clearly.
 export const WALLS = [
   // border (four sides, 1 m thick)
   [-HALF, -HALF, HALF, -HALF + 1],
@@ -65,13 +46,43 @@ export const WALLS = [
   [-2, -30, 1, -27],
   [8, 28, 11, 31],
   [-14, 24, -11, 27],
+  // site C cover: crate stack + low container, corners of the third site.
+  [24, 2, 27, 4],
+  [33, 10, 36, 12],
 ];
 
-// Bomb sites: centre + radius in metres.
+// Wall height by index (m) — one rule for render and collision.
+export function wallHeight(i) { return i < 4 ? 3.2 : i < 8 ? 5 : i < 18 ? 2.6 : 1.4; }
+
+// Wall kinds, one char per wall: B border, W warehouse/office, R/T/O container, C crate.
+export const WALL_KINDS = 'BBBBWWWWWWWWRTORTORTOCCCCCCC';
+
+// Bomb sites (centre + radius): three rotating sites, A warehouse, B office, C east dock.
 export const SITE_A = { x: -26, z: -27, r: 6.5, name: 'A' };
 export const SITE_B = { x: 26, z: 27, r: 6.5, name: 'B' };
-// Spawns: attackers (Senja, the player's team) south-west, defenders north-east.
-// 5 per team — TEAM_SIZE = 5 (rounds.js).
+export const SITE_C = { x: 30, z: 8, r: 6.5, name: 'C' };
+export const SITES = [SITE_A, SITE_B, SITE_C];
+
+// Named callouts [name, x, z] — the names the team calls over the radio.
+export const CALLOUTS = [
+  ['A Site', -26, -27], ['A Hall', -30, -20], ['A Doors', -12, -24], ['A Long', -33, -8],
+  ['B Site', 26, 27], ['B Office', 30, 33], ['B Doors', 15, 13], ['B Long', 33, 17],
+  ['C Dock', 30, 8], ['C Main', 21, 8], ['East Quay', 34, -4],
+  ['Mid', 0, 0], ['Mid Cross', 0, -6], ['Container Yard', -12, -8],
+  ['West Quay', -32, 8], ['West Lane', -34, -8], ['East Lane', 24, -16],
+  ['North Alley', 6, -30], ['South Alley', 0, 30],
+  ['Senja Spawn', -30, 32], ['Bayang Spawn', 30, -30],
+];
+
+// calloutAt(x, z): the callout name for a position, or null (HUD minimap label).
+export function calloutAt(x, z, range = 9) {
+  let best = null, bestD = range * range;
+  for (const [name, cx, cz] of CALLOUTS) {
+    const d = (x - cx) * (x - cx) + (z - cz) * (z - cz);
+    if (d < bestD) { bestD = d; best = name; }
+  }
+  return best;
+}
 export const SPAWN_SENJA = [
   { x: -34, z: 30 }, { x: -30, z: 34 }, { x: -26, z: 30 },
   { x: -34, z: 36 }, { x: -22, z: 34 },
@@ -80,7 +91,6 @@ export const SPAWN_BAYANG = [
   { x: 30, z: -30 }, { x: 34, z: -26 }, { x: 26, z: -34 },
   { x: 34, z: -34 }, { x: 22, z: -30 },
 ];
-// Mid hold spots defenders fall back to.
 export const HOLD_SPOTS = [
   { x: -24, z: -20 }, { x: -18, z: -30 }, { x: 24, z: 20 },
   { x: 18, z: 30 }, { x: 0, z: -6 },
@@ -89,9 +99,7 @@ export const HOLD_SPOTS = [
 // --- grid ---------------------------------------------------------------
 export function cellOf(v) { return clamp(Math.floor((v + HALF) / CELL), 0, GRID - 1); }
 export function cellCenter(c) { return c * CELL - HALF + CELL / 2; }
-export function cellIndex(gx, gz) { return gz * GRID + gx; }
 
-// blocked[gz * GRID + gx] = 1 when the cell centre is inside any wall.
 export const blocked = new Uint8Array(GRID * GRID);
 for (let gz = 0; gz < GRID; gz++) {
   for (let gx = 0; gx < GRID; gx++) {
@@ -125,26 +133,20 @@ export function hasLineOfSight(x0, z0, x1, z1) {
   return true;
 }
 
-// --- A* -----------------------------------------------------------------
-// Heuristik OCTILE (admissible + konsisten untuk gerakan 8 arah):
-//   h = max(|dx|,|dz|) + (sqrt(2) - 1) * min(|dx|,|dz|)
-// Bukti tidak overestimate: setiap langkah grid biayanya minimal 1
-// (lurus) atau sqrt(2) (diagonal). Jalur grid mana pun dari sel A ke sel B
-// butuh minimal min(|dx|,|dz|) langkah diagonal + (|max|-|min|) langkah
-// lurus, total = octile. Jadi h <= biaya jalur optimal sebenarnya.
-// Karena h admissible DAN konsisten (memenuhi segitiga di tiap edge),
-// node pertama kali di-pop dari heap sudah punya g optimal -> path yang
-// direkonstruksi OPTIMAL (panjang grid minimal). Diverifikasi vs BFS.
-//
-// Scratch arrays live here, reused across calls: no allocation in the hot
-// loop. 8-neighbour moves; diagonal tidak boleh memotong sudut dinding.
+// --- A* ---
+// Octile heuristic (admissible + consistent, 8-direction):
+// h = max(|dx|,|dz|) + (sqrt(2)-1) * min(|dx|,|dz|). It never overestimates,
+// so the first node popped already has optimal g and the rebuilt path is
+// OPTIMAL (minimal grid length, verified vs BFS). Scratch arrays are reused
+// across calls (no allocation in the hot loop); diagonals must not cut
+// wall corners.
 const N = GRID * GRID;
 const gScore = new Float64Array(N);
 const fScore = new Float64Array(N);
 const cameFrom = new Int32Array(N);
 const closedSet = new Uint8Array(N);
-const heap = new Int32Array(N);      // satu entri per node, max N
-const heapPos = new Int32Array(N);   // heapPos[node] = posisi di heap, -1 = tidak di heap
+const heap = new Int32Array(N);      // one entry per node, max N
+const heapPos = new Int32Array(N);   // heapPos[node] = position in heap, -1 = not in heap
 let heapLen = 0;
 
 function heapSwap(a, b) {
@@ -170,8 +172,8 @@ function heapBubbleDown(i) {
     i = m;
   }
 }
-// Push node, atau decrease-key bila node sudah ada di heap dengan f lebih
-// besar. Satu entri per node: tidak ada entri basi, invarian heap utuh.
+// Push a node, or decrease-key if it is already in the heap with a
+// larger f. One entry per node: no stale entries, heap invariant intact.
 function heapPushOrDecrease(node, f) {
   const pos = heapPos[node];
   if (pos >= 0) {
@@ -202,9 +204,8 @@ function octile(dx, dz) {
   return mx + (Math.SQRT2 - 1) * mn;
 }
 
-// A* antar indeks sel. Mengembalikan { path: [indeks sel...] start..goal,
-// visited: jumlah node yang di-pop } atau null bila tidak ada jalur.
-// Path di sini MENTAH (per sel); smoothing dilakukan smoothPath/findPath.
+// A* over cell indices. Returns { path: [cell indices...] start..goal,
+// visited: number of popped nodes } or null when there is no path.
 export function astarCells(startIdx, goalIdx) {
   if (blocked[startIdx] || blocked[goalIdx]) return null;
   gScore.fill(Infinity);
@@ -238,7 +239,7 @@ export function astarCells(startIdx, goalIdx) {
         if (nx < 0 || nz < 0 || nx >= GRID || nz >= GRID) continue;
         const ni = nz * GRID + nx;
         if (blocked[ni] || closedSet[ni]) continue;
-        // Diagonal tidak boleh memotong sudut dinding.
+        // Diagonals must not cut wall corners.
         if (dx !== 0 && dz !== 0 &&
           (blocked[cz * GRID + nx] || blocked[nz * GRID + cx])) continue;
         const ng = gc + ((dx !== 0 && dz !== 0) ? Math.SQRT2 : 1);
@@ -253,16 +254,10 @@ export function astarCells(startIdx, goalIdx) {
   return null;
 }
 
-// --- smoothing: string-pulling via LOS ----------------------------------
-// Jarak bebas minimal dari dinding untuk sebuah segmen jalan: radius bot
-// (mover.js: body.radius = 0.45 m). Segmen yang lolos harus menjaga pusat
-// bot sejauh itu dari setiap rect dinding, jadi resolveCircle tidak pernah
-// mendorong bot saat ia mengikuti path — tidak ada jitter / nyangkut.
+// --- smoothing: string-pulling via LOS ---
+// Minimum clearance from walls: the bot radius (0.45 m).
 export const BOT_CLEARANCE = 0.45;
 
-// Jarak terpendek antara segmen (x0,z0)->(x1,z1) dan semua rect WALLS.
-// 0 bila segmen menyentuh/menembus dinding. Eksak (geometri, bukan
-// sampling grid): tidak ada sudut dinding yang lolos karena sampling.
 function pointSegDist(px, pz, x0, z0, x1, z1) {
   const dx = x1 - x0, dz = z1 - z0;
   const len2 = dx * dx + dz * dz;
@@ -281,17 +276,13 @@ function segSegIntersect(ax, az, bx, bz, cx, cz, dx, dz) {
 export function segmentClearance(x0, z0, x1, z1) {
   let best = Infinity;
   for (const w of WALLS) {
-    // Ujung di dalam rect -> 0.
     if ((x0 >= w[0] && x0 <= w[2] && z0 >= w[1] && z0 <= w[3]) ||
         (x1 >= w[0] && x1 <= w[2] && z1 >= w[1] && z1 <= w[3])) return 0;
-    // Segmen memotong sisi rect -> 0.
     const corners = [[w[0], w[1]], [w[2], w[1]], [w[2], w[3]], [w[0], w[3]]];
     for (let e = 0; e < 4; e++) {
       const a = corners[e], b = corners[(e + 1) % 4];
       if (segSegIntersect(x0, z0, x1, z1, a[0], a[1], b[0], b[1])) return 0;
     }
-    // Jika tidak berpotongan: jarak min = sudut rect ke segmen, atau ujung
-    // segmen ke sisi rect.
     for (const c of corners) {
       const d = pointSegDist(c[0], c[1], x0, z0, x1, z1);
       if (d < best) best = d;
@@ -307,12 +298,10 @@ export function segmentClearance(x0, z0, x1, z1) {
   return best;
 }
 
-// smoothPath(points) — points: [{x,z}...] (mentah, per sel). Greedy: dari
-// anchor terakhir, lompat ke waypoint terjauh yang masih terlihat lurus
-// (hasLineOfSight) DAN menjaga jarak aman dari dinding (segmentClearance
-// >= BOT_CLEARANCE). Hasil: waypoint minimal yang tetap legal — tiap segmen
-// lolos LOS + berjarak aman dari dinding, dan tiap titik di sel bebas
-// (inputnya memang begitu). Mengembalikan array BARU; input tidak diubah.
+// smoothPath(points) — points: [{x,z}...] raw, per cell. Greedy: from the
+// last anchor, jump to the farthest waypoint still visible in a straight
+// line (hasLineOfSight) AND keeping wall distance (segmentClearance >=
+// BOT_CLEARANCE). Result: minimal legal waypoints; returns a NEW array.
 export function smoothPath(points) {
   const n = points.length;
   if (n <= 2) return points.slice();
@@ -331,8 +320,6 @@ export function smoothPath(points) {
   return out;
 }
 
-// Nearest free cell to (gx, gz) within radius 3 (spiral), or null.
-// Lets callers aim at a wall-adjacent point without failing the search.
 function nearestFree(gx, gz) {
   if (!isBlockedCell(gx, gz)) return { gx, gz };
   for (let r = 1; r <= 3; r++) {
@@ -346,20 +333,16 @@ function nearestFree(gx, gz) {
   return null;
 }
 
-// nearestWaypoint(x, z) — titik waypoint bebas terdekat dari (x, z):
-// pusat sel bebas terdekat (radius cari 3 sel). Dipakai bot untuk
-// men-snap tujuan yang jatuh di dekat dinding ke titik jalan yang legal.
-// Mengembalikan {x, z} atau null bila tidak ada sel bebas di dekatnya.
+// nearestWaypoint(x, z) — the nearest free waypoint (centre of the
+// nearest free cell, search radius 3). Bots snap wall-adjacent goals here.
 export function nearestWaypoint(x, z) {
   const f = nearestFree(cellOf(x), cellOf(z));
   if (!f) return null;
   return { x: cellCenter(f.gx), z: cellCenter(f.gz) };
 }
 
-// findPath(sx, sz, tx, tz) -> array of {x, z} world waypoints, smoothed,
-// or null when unreachable. Signature sama seperti draft (dipakai bots.js
-// dan main.js). Path mulai tepat di (sx, sz), berakhir tepat di (tx, tz),
-// dan tiap segmen di antaranya lolos hasLineOfSight.
+// findPath(sx, sz, tx, tz) -> smoothed [{x, z}] waypoints, or null when
+// unreachable. Starts exactly at (sx, sz), ends exactly at (tx, tz).
 export function findPath(sx, sz, tx, tz) {
   const sg = nearestFree(cellOf(sx), cellOf(sz));
   const tg = nearestFree(cellOf(tx), cellOf(tz));
@@ -368,8 +351,8 @@ export function findPath(sx, sz, tx, tz) {
   const goal = tg.gz * GRID + tg.gx;
   const res = astarCells(start, goal);
   if (!res) return null;
-  // Titik mentah: start persis + pusat sel perantara + target persis.
-  // (Sel pertama/terakhir dilewati: pusatnya sudah dekat dengan start/target.)
+// Raw points: exact start + intermediate cell centres + exact target.
+// (First/last cells skipped: their centres are already near start/target.)
   const raw = [{ x: sx, z: sz }];
   for (let i = 1; i < res.path.length - 1; i++) {
     const c = res.path[i];
@@ -379,9 +362,9 @@ export function findPath(sx, sz, tx, tz) {
   return smoothPath(raw);
 }
 
-// --- collision: circle vs wall rectangles --------------------------------
-// resolveCircle(pos, radius): pushes pos out of any wall it overlaps.
-// Returns true when a push happened. pos is {x, z} mutated in place.
+// --- collision: circle vs wall rectangles ---
+// resolveCircle(pos, radius): pushes pos out of any wall it overlaps;
+// returns true when a push happened; pos is mutated in place.
 export function resolveCircle(pos, radius) {
   let pushed = false;
   for (const w of WALLS) {
@@ -395,7 +378,6 @@ export function resolveCircle(pos, radius) {
       pos.x = nx + (dx / d) * radius;
       pos.z = nz + (dz / d) * radius;
     } else {
-      // Centre inside the wall: push out along the smallest penetration axis.
       const pl = pos.x - w[0], pr = w[2] - pos.x;
       const pt = pos.z - w[1], pb = w[3] - pos.z;
       const m = Math.min(pl, pr, pt, pb);
@@ -410,7 +392,7 @@ export function resolveCircle(pos, radius) {
 }
 
 // Ray vs walls: nearest hit distance along (ox,oz)+t*(dx,dz), or Infinity.
-// Used by hitscan so bullets stop at walls, and by bot hearing/LOS checks.
+// Hitscan stops bullets at walls; hearing/LOS checks use it too.
 export function rayWalls(ox, oz, dx, dz, maxDist) {
   let best = Infinity;
   for (const w of WALLS) {

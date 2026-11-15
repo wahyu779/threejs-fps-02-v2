@@ -1,4 +1,4 @@
-// audio.js — Pelabuhan Senja v2 sound, synthesized, no audio files.
+// audio.js — sound, synthesised, no audio files.
 // One job: every sound the game makes, built from WebAudio oscillators
 // and filtered noise. All harbour-original: no sampled sounds, no rips.
 let ctx = null;

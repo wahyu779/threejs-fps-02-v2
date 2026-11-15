@@ -1,63 +1,26 @@
-// mover.js — shared movement physics for Pelabuhan Senja v2.
-// One job: move a circle-bodied fighter with acceleration, friction and
-// wall sliding. Player and bots both step through here, so movement feels
-// the same on both sides of a duel.
-import { resolveCircle } from './map.js';
-import { clamp } from './rng.js';
+// mover.js — thin shell over collide.js.
+// One job: keep the movement API (makeBody/stepMove/stepJump, speed
+// constants) so player.js and bots.js call it unchanged; physics lives in collide.js.
+import { moveBody, jumpBody, WALK_SPEED, CROUCH_SPEED, AIR_CONTROL, ACCEL, FRICTION, STAND_HEIGHT, STAND_EYE } from './collide.js';
 
-export const WALK_SPEED = 5.2;   // m/s
-export const CROUCH_SPEED = 2.6;
-export const AIR_CONTROL = 0.25;
-export const ACCEL = 42;         // m/s^2
-export const FRICTION = 10;      // 1/s ground damping
+export { WALK_SPEED, CROUCH_SPEED, AIR_CONTROL, ACCEL, FRICTION };
 
 export function makeBody(x, z) {
   return {
     pos: { x, z }, vel: { x: 0, z: 0 },
     yaw: 0, radius: 0.45,
     crouched: false, airborne: false, y: 0, vy: 0,
+    height: STAND_HEIGHT, eyeHeight: STAND_EYE, crouchAmt: 0,
+    quietWalk: false, // Shift walk: soft steps (hearing bus reads this)
   };
 }
 
-// wishX/wishZ: desired move direction in world space (unit or zero).
-// speed: target speed. dt: fixed step.
+// wishX/wishZ: desired move direction (unit or zero). speed: target speed.
 export function stepMove(body, wishX, wishZ, speed, dt) {
-  const onGround = !body.airborne;
-  const accel = onGround ? ACCEL : ACCEL * AIR_CONTROL;
-  const wl = Math.hypot(wishX, wishZ);
-  if (wl > 0.01) {
-    body.vel.x += (wishX / wl) * accel * dt;
-    body.vel.z += (wishZ / wl) * accel * dt;
-  }
-  // Friction pulls velocity toward the wish speed, never past it.
-  const sp = Math.hypot(body.vel.x, body.vel.z);
-  if (sp > 0.001) {
-    const target = wl > 0.01 ? speed : 0;
-    const drop = onGround ? FRICTION * dt : 0.4 * dt;
-    const ns = Math.max(target, sp - sp * drop);
-    // Cap at wish speed when accelerating from rest is not the case:
-    // never let friction speed the body up, only slow it.
-    const capped = Math.min(sp, Math.max(ns, target === 0 ? 0 : sp));
-    body.vel.x *= capped / sp;
-    body.vel.z *= capped / sp;
-  }
-  // Hard cap so diagonal + accel never exceeds the target speed by much.
-  const sp2 = Math.hypot(body.vel.x, body.vel.z);
-  const maxSp = speed * 1.15;
-  if (sp2 > maxSp) { body.vel.x *= maxSp / sp2; body.vel.z *= maxSp / sp2; }
-  body.pos.x += body.vel.x * dt;
-  body.pos.z += body.vel.z * dt;
-  resolveCircle(body.pos, body.radius);
-  body.pos.x = clamp(body.pos.x, -39, 39);
-  body.pos.z = clamp(body.pos.z, -39, 39);
+  moveBody(body, wishX, wishZ, speed, dt);
 }
 
-// Simple vertical hop. Ground is y=0 everywhere (flat quay).
+// Simple vertical hop; gravity and landing live inside moveBody.
 export function stepJump(body, wantJump, dt) {
-  if (wantJump && !body.airborne) { body.vy = 5.4; body.airborne = true; }
-  if (body.airborne) {
-    body.vy -= 14 * dt;
-    body.y += body.vy * dt;
-    if (body.y <= 0) { body.y = 0; body.vy = 0; body.airborne = false; }
-  }
+  if (wantJump) jumpBody(body);
 }

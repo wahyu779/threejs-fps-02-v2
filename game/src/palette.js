@@ -1,4 +1,4 @@
-// palette.js — the dusk-harbour look of Pelabuhan Senja.
+// palette.js — the dusk-harbour look.
 // One job: every colour / material constant the scene uses, in one place,
 // so the map reads as one place at one hour: low sun, wet concrete, rust.
 export const PALETTE = {
