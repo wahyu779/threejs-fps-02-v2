@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pelabuhan Senja — Tactical FPS v2</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0c101a;
+    font-family: "Segoe UI", system-ui, sans-serif; color: #e8e4d8; }
+  #game { position: fixed; inset: 0; }
+  canvas.webgl { display: block; width: 100%; height: 100%; }
+  .hud { position: fixed; pointer-events: none; z-index: 5; }
+  #topbar { top: 14px; left: 50%; transform: translateX(-50%); text-align: center; }
+  #timer { font-size: 30px; font-weight: 700; letter-spacing: 2px; text-shadow: 0 2px 6px #000; }
+  #score { font-size: 18px; font-weight: 700; color: #ffd54f; text-shadow: 0 2px 6px #000; }
+  #round-label { font-size: 12px; letter-spacing: 3px; opacity: .85; }
+  #minimap-wrap { top: 14px; right: 14px; border: 1px solid rgba(255,255,255,.25); }
+  #minimap { display: block; width: 168px; height: 168px; }
+  #status { left: 14px; bottom: 14px; width: 260px; }
+  .bar { height: 16px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.3); margin-top: 4px; }
+  .bar > div { height: 100%; }
+  #hp-fill { background: #43a047; width: 100%; }
+  #armor-fill { background: #1e88e5; width: 0%; }
+  .bar-label { font-size: 12px; font-weight: 700; text-shadow: 0 1px 4px #000; }
+  #ammo { position: fixed; right: 18px; bottom: 16px; font-size: 30px; font-weight: 700;
+    text-shadow: 0 2px 6px #000; }
+  #money { position: fixed; right: 18px; bottom: 56px; font-size: 18px; font-weight: 700;
+    color: #a5d6a7; text-shadow: 0 2px 6px #000; }
+  #crosshair { left: 50%; top: 50%; transform: translate(-50%,-50%); width: 0; height: 0; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff;
+    box-shadow: 0 0 3px #000; }
+  #crosshair::before { left: calc(-1px - var(--gap, 8px)); top: -1px; width: calc(2px + var(--gap, 8px) * 2);
+    height: 2px; transform: translateX(0); }
+  #crosshair::after { top: calc(-1px - var(--gap, 8px)); left: -1px; height: calc(2px + var(--gap, 8px) * 2);
+    width: 2px; }
+  #crosshair .dot { position: absolute; left: -1px; top: -1px; width: 2px; height: 2px; background: #fff; }
+  #hitmarker { left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 26px; font-weight: 900;
+    opacity: 0; transition: opacity .12s; text-shadow: 0 0 4px #000; }
+  #banner-wrap { left: 50%; top: 26%; transform: translateX(-50%); text-align: center; opacity: 0;
+    transition: opacity .3s; }
+  #banner { font-size: 42px; font-weight: 900; letter-spacing: 4px; text-shadow: 0 3px 10px #000; }
+  #banner-sub { font-size: 16px; text-shadow: 0 2px 6px #000; }
+  #feed { left: 14px; top: 120px; font-size: 13px; text-shadow: 0 1px 4px #000; line-height: 1.5; }
+  #buy-menu { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    background: rgba(10,14,24,.92); border: 1px solid #8a7a5a; padding: 18px 22px; z-index: 10;
+    pointer-events: auto; width: 420px; }
+  #buy-menu h2 { margin: 0 0 4px; letter-spacing: 2px; }
+  #buy-menu p { margin: 4px 0 12px; font-size: 13px; opacity: .8; }
+  #buy-menu button { display: block; width: 100%; margin: 6px 0; padding: 9px; text-align: left;
+    background: #1c2733; color: #e8e4d8; border: 1px solid #546e7a; cursor: pointer; font-size: 14px; }
+  #buy-menu button:hover { background: #2e4a5a; }
+  #buy-menu button b { float: right; color: #a5d6a7; }
+  #end-screen { display: none; position: fixed; inset: 0; background: rgba(5,8,14,.82); z-index: 20;
+    align-items: center; justify-content: center; flex-direction: column; }
+  #end-title { font-size: 44px; font-weight: 900; letter-spacing: 4px; }
+  #end-score { font-size: 22px; margin-top: 10px; color: #ffd54f; }
+  #help { left: 14px; bottom: 120px; font-size: 12px; opacity: .75; text-shadow: 0 1px 4px #000;
+    line-height: 1.6; }
+  #debug { position: fixed; left: 6px; top: 6px; font: 11px monospace; color: #9ccc65; z-index: 30;
+    white-space: pre; text-shadow: 0 1px 2px #000; }
+  #selftest { display: none; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js" } }
+</script>
+</head>
+<body>
+<div id="game"></div>
+<div class="hud" id="topbar">
+  <div id="round-label">RONDE 1 / 9</div>
+  <div id="timer">0:12</div>
+  <div id="score">0 : 0</div>
+</div>
+<div class="hud" id="minimap-wrap"><canvas id="minimap" width="168" height="168"></canvas></div>
+<div class="hud" id="status">
+  <div class="bar-label"><span id="hp-text">100 HP</span> &nbsp; <span id="armor-text"></span></div>
+  <div class="bar"><div id="hp-fill"></div></div>
+  <div class="bar"><div id="armor-fill"></div></div>
+</div>
+<div id="ammo">12 / 48</div>
+<div id="money">$800</div>
+<div class="hud" id="crosshair"><span class="dot"></span></div>
+<div class="hud" id="hitmarker">✕</div>
+<div class="hud" id="banner-wrap"><div id="banner"></div><div id="banner-sub"></div></div>
+<div class="hud" id="feed"></div>
+<div class="hud" id="help">WASD gerak · Mouse bidik · Klik tembak · R reload · B beli · E tanam/jinakkan bom<br>
+  G granat · Ctrl/C jongkok · Spasi lompat · 1-4 ganti senjata</div>
+<div id="buy-menu">
+  <h2>BELI — FASE PERSIAPAN</h2>
+  <p>Tekan B untuk tutup. Uangmu: <b id="buy-money">$800</b></p>
+  <button data-buy="rifle">Senapan Senja — senapan serbu <b>$2700</b></button>
+  <button data-buy="marksman">Penembak Jarak — penembak jitu <b>$3500</b></button>
+  <button data-buy="shotgun">Penyebar Dermaga — shotgun <b>$1800</b></button>
+  <button data-buy="armor">Rompi Kevlar — serap 50% damage <b>$650</b></button>
+  <button data-buy="grenade">Granat Frag <b>$300</b></button>
+</div>
+<div id="end-screen"><div id="end-title"></div><div id="end-score"></div>
+  <div style="margin-top:14px;opacity:.8">Pelabuhan Senja v2 — pertandingan selesai</div></div>
+<div id="debug"></div>
+<div id="selftest"></div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
